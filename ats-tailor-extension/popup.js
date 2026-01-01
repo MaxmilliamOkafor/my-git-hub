@@ -47,15 +47,31 @@ class ATSTailor {
   }
 
   async init() {
-    await this.loadSession();
-    this.bindEvents();
-    this.updateUI();
+    try {
+      await this.loadSession();
+      this.bindEvents();
+      this.updateUI();
 
-    // Auto-detect job when popup opens (but do NOT auto-tailor)
-    if (this.session) {
-      await this.refreshSessionIfNeeded();
-      await this.detectCurrentJob();
+      // Auto-detect job when popup opens (but do NOT auto-tailor)
+      if (this.session) {
+        await this.refreshSessionIfNeeded();
+        await this.detectCurrentJob();
+      }
+    } catch (error) {
+      console.error('[ATS Tailor] Init error:', error);
+      this.setStatus('Error initializing', 'error');
     }
+  }
+
+  setStatus(text, type = 'ready') {
+    const indicator = document.getElementById('statusIndicator');
+    const statusText = indicator?.querySelector('.status-text');
+    
+    if (indicator) {
+      indicator.className = 'status-indicator';
+      if (type) indicator.classList.add(type);
+    }
+    if (statusText) statusText.textContent = text;
   }
 
   async refreshSessionIfNeeded() {
@@ -380,9 +396,13 @@ class ATSTailor {
       this.setStatus('Ready', 'ready');
     }
     
-    document.getElementById('todayCount').textContent = this.stats.today;
-    document.getElementById('totalCount').textContent = this.stats.total;
-    document.getElementById('avgTime').textContent = this.stats.avgTime > 0 ? `${Math.round(this.stats.avgTime)}s` : '0s';
+    const todayCount = document.getElementById('todayCount');
+    const totalCount = document.getElementById('totalCount');
+    const avgTime = document.getElementById('avgTime');
+    
+    if (todayCount) todayCount.textContent = this.stats.today;
+    if (totalCount) totalCount.textContent = this.stats.total;
+    if (avgTime) avgTime.textContent = this.stats.avgTime > 0 ? `${Math.round(this.stats.avgTime)}s` : '0s';
     
     // Initialize auto-tailor toggle from stored state
     const autoTailorToggle = document.getElementById('autoTailorToggle');
@@ -441,23 +461,8 @@ class ATSTailor {
     const missing = this.generatedDocuments.missingKeywords || [];
     const total = matched.length + missing.length;
     
-    // Update donut chart
-    const donutSegment = document.getElementById('donutSegment');
-    const donutPercentage = document.getElementById('donutPercentage');
-    
-    if (donutSegment) {
-      donutSegment.setAttribute('stroke-dasharray', `${score}, 100`);
-      // Set color class based on score
-      donutSegment.className = 'donut-segment';
-      if (score < 40) donutSegment.classList.add('score-low');
-      else if (score < 70) donutSegment.classList.add('score-medium');
-      else if (score < 90) donutSegment.classList.add('score-good');
-      else donutSegment.classList.add('score-excellent');
-    }
-    
-    if (donutPercentage) {
-      donutPercentage.textContent = `${score}%`;
-    }
+    // Animate donut chart
+    this.animateDonutChart(score);
     
     // Update match title and description
     const matchTitle = document.getElementById('matchTitle');
@@ -468,12 +473,15 @@ class ATSTailor {
       if (score >= 95) matchTitle.textContent = 'Keyword Match - Excellent';
       else if (score >= 80) matchTitle.textContent = 'Keyword Match - Good';
       else if (score >= 60) matchTitle.textContent = 'Keyword Match - Fair';
+      else if (score > 0) matchTitle.textContent = 'Profile Match';
       else matchTitle.textContent = 'Profile Match';
     }
     
     if (matchDescription) {
       if (score >= 95) {
         matchDescription.textContent = `Your resume has ${matched.length} out of ${total} (${score}%) keywords that appear in the job description.`;
+      } else if (score >= 80) {
+        matchDescription.textContent = `Great match! Your resume has ${matched.length} of ${total} (${score}%) keywords.`;
       } else if (score >= 70) {
         matchDescription.textContent = `Good match! Add more relevant skills to improve your fit.`;
       } else if (score > 0) {
@@ -488,35 +496,92 @@ class ATSTailor {
     }
     
     // Update keyword badges
-    const keywordBadges = document.getElementById('keywordBadges');
-    if (keywordBadges) {
-      keywordBadges.innerHTML = '';
-      
-      // Add matched keywords (filled badges)
-      matched.slice(0, 6).forEach(kw => {
-        const badge = document.createElement('span');
-        badge.className = 'keyword-badge matched';
-        badge.textContent = kw;
-        keywordBadges.appendChild(badge);
-      });
-      
-      // Add missing keywords (outlined badges)
-      missing.slice(0, 8).forEach(kw => {
-        const badge = document.createElement('span');
-        badge.className = 'keyword-badge missing';
-        badge.textContent = kw;
-        keywordBadges.appendChild(badge);
-      });
-    }
+    this.updateKeywordBadges(matched, missing);
     
+    // Update priority sections
+    this.updatePriorityKeywords(matched, missing);
+    
+    // Update Simplify score card
+    this.updateSimplifyScore(score, matched, missing);
+  }
+
+  animateDonutChart(targetScore) {
+    const donutSegment = document.getElementById('donutSegment');
+    const donutPercentage = document.getElementById('donutPercentage');
+    
+    if (!donutSegment || !donutPercentage) return;
+    
+    // Set color class based on score
+    donutSegment.className = 'donut-segment';
+    if (targetScore < 40) donutSegment.classList.add('score-low');
+    else if (targetScore < 70) donutSegment.classList.add('score-medium');
+    else if (targetScore < 90) donutSegment.classList.add('score-good');
+    else donutSegment.classList.add('score-excellent');
+    
+    // Animate from 0 to target
+    let currentScore = 0;
+    const duration = 1000; // 1 second
+    const startTime = performance.now();
+    
+    const animate = (currentTime) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Easing function (ease-out)
+      const eased = 1 - Math.pow(1 - progress, 3);
+      currentScore = Math.round(eased * targetScore);
+      
+      donutSegment.setAttribute('stroke-dasharray', `${currentScore}, 100`);
+      donutPercentage.textContent = `${currentScore}%`;
+      
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      }
+    };
+    
+    requestAnimationFrame(animate);
+  }
+
+  updateKeywordBadges(matched, missing) {
+    const keywordBadges = document.getElementById('keywordBadges');
+    if (!keywordBadges) return;
+    
+    keywordBadges.innerHTML = '';
+    
+    // Add matched keywords (filled badges)
+    matched.slice(0, 6).forEach(kw => {
+      const badge = document.createElement('span');
+      badge.className = 'keyword-badge matched';
+      badge.textContent = typeof kw === 'object' ? kw.term || kw.keyword : kw;
+      keywordBadges.appendChild(badge);
+    });
+    
+    // Add missing keywords (outlined badges)
+    missing.slice(0, 8).forEach(kw => {
+      const badge = document.createElement('span');
+      badge.className = 'keyword-badge missing';
+      badge.textContent = typeof kw === 'object' ? kw.term || kw.keyword : kw;
+      keywordBadges.appendChild(badge);
+    });
+  }
+
+  updatePriorityKeywords(matched, missing) {
     // Separate into high and low priority (first 60% high, rest low)
     const highPriorityMatched = matched.slice(0, Math.ceil(matched.length * 0.6));
     const highPriorityMissing = missing.slice(0, Math.ceil(missing.length * 0.4));
     const lowPriorityMatched = matched.slice(Math.ceil(matched.length * 0.6));
     const lowPriorityMissing = missing.slice(Math.ceil(missing.length * 0.4));
     
-    const allHighPriority = [...highPriorityMatched.map(k => ({keyword: k, matched: true})), ...highPriorityMissing.map(k => ({keyword: k, matched: false}))];
-    const allLowPriority = [...lowPriorityMatched.map(k => ({keyword: k, matched: true})), ...lowPriorityMissing.map(k => ({keyword: k, matched: false}))];
+    const getKeywordText = (k) => typeof k === 'object' ? k.term || k.keyword : k;
+    
+    const allHighPriority = [
+      ...highPriorityMatched.map(k => ({keyword: getKeywordText(k), matched: true})), 
+      ...highPriorityMissing.map(k => ({keyword: getKeywordText(k), matched: false}))
+    ];
+    const allLowPriority = [
+      ...lowPriorityMatched.map(k => ({keyword: getKeywordText(k), matched: true})), 
+      ...lowPriorityMissing.map(k => ({keyword: getKeywordText(k), matched: false}))
+    ];
     
     // Update high priority section
     const highPriorityKeywords = document.getElementById('highPriorityKeywords');
@@ -527,7 +592,7 @@ class ATSTailor {
       const highMatched = allHighPriority.filter(k => k.matched).length;
       
       if (highPriorityCount) {
-        highPriorityCount.textContent = `${highMatched}/${allHighPriority.length}`;
+        highPriorityCount.innerHTML = `<span class="check-count">✓</span> ${highMatched}/${allHighPriority.length}`;
       }
       
       allHighPriority.slice(0, 12).forEach(item => {
@@ -550,7 +615,7 @@ class ATSTailor {
       const lowMatched = allLowPriority.filter(k => k.matched).length;
       
       if (lowPriorityCount) {
-        lowPriorityCount.textContent = `${lowMatched}/${allLowPriority.length}`;
+        lowPriorityCount.innerHTML = `<span class="check-count">✓</span> ${lowMatched}/${allLowPriority.length}`;
       }
       
       allLowPriority.slice(0, 8).forEach(item => {
@@ -565,11 +630,57 @@ class ATSTailor {
     }
   }
 
-    const indicator = document.getElementById('statusIndicator');
-    const statusText = indicator?.querySelector('.status-text');
+  updateSimplifyScore(score, matched, missing) {
+    const simplifyScoreCard = document.getElementById('simplifyScoreCard');
+    if (!simplifyScoreCard) return;
     
-    if (indicator) indicator.className = `status-indicator ${type}`;
-    if (statusText) statusText.textContent = text;
+    // Show card if we have data
+    if (score > 0 || matched.length > 0) {
+      simplifyScoreCard.classList.remove('hidden');
+    }
+    
+    // Calculate breakdown
+    const keywordCoverage = Math.round((matched.length / (matched.length + missing.length || 1)) * 50);
+    const missingPenalty = Math.min(20, Math.round((missing.filter(k => {
+      const kw = typeof k === 'object' ? k : { priority: 'high' };
+      return kw.priority === 'high';
+    }).length / Math.max(1, missing.length)) * 20));
+    const experienceScore = 18;
+    const technicalScore = Math.round((matched.filter(k => {
+      const kw = typeof k === 'object' ? k : {};
+      return kw.category === 'technical';
+    }).length / Math.max(1, matched.length)) * 15);
+    const formatScore = 14;
+    
+    const sKeywordCoverage = document.getElementById('sKeywordCoverage');
+    const sMissingKeywords = document.getElementById('sMissingKeywords');
+    const sExperienceMatch = document.getElementById('sExperienceMatch');
+    const sTechnicalAlign = document.getElementById('sTechnicalAlign');
+    const sLocationFormat = document.getElementById('sLocationFormat');
+    const sTotalScore = document.getElementById('sTotalScore');
+    
+    if (sKeywordCoverage) sKeywordCoverage.textContent = `${keywordCoverage}/50`;
+    if (sMissingKeywords) sMissingKeywords.textContent = `-${missingPenalty}/20`;
+    if (sExperienceMatch) sExperienceMatch.textContent = `${experienceScore}/20`;
+    if (sTechnicalAlign) sTechnicalAlign.textContent = `${technicalScore}/15`;
+    if (sLocationFormat) sLocationFormat.textContent = `${formatScore}/15`;
+    if (sTotalScore) sTotalScore.textContent = `${score}/100`;
+    
+    // Show top 5 fixes if there are missing keywords
+    const missingFixes = document.getElementById('missingFixes');
+    const fixesList = document.getElementById('fixesList');
+    
+    if (missingFixes && fixesList && missing.length > 0) {
+      missingFixes.classList.remove('hidden');
+      fixesList.innerHTML = '';
+      
+      missing.slice(0, 5).forEach(kw => {
+        const li = document.createElement('li');
+        const keyword = typeof kw === 'object' ? kw.term || kw.keyword : kw;
+        li.innerHTML = `<strong>${keyword}</strong> - Add to relevant section`;
+        fixesList.appendChild(li);
+      });
+    }
   }
 
   async login() {
@@ -585,8 +696,10 @@ class ATSTailor {
       return;
     }
     
-    loginBtn.disabled = true;
-    loginBtn.textContent = 'Signing in...';
+    if (loginBtn) {
+      loginBtn.disabled = true;
+      loginBtn.textContent = 'Signing in...';
+    }
     
     try {
       const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
@@ -614,18 +727,17 @@ class ATSTailor {
       this.showToast('Logged in successfully!', 'success');
       this.updateUI();
       
-      // Auto-detect and tailor
-      const found = await this.detectCurrentJob();
-      if (found && this.currentJob) {
-        this.tailorDocuments();
-      }
+      // Auto-detect job
+      await this.detectCurrentJob();
       
     } catch (error) {
       console.error('Login error:', error);
       this.showToast(error.message || 'Login failed', 'error');
     } finally {
-      loginBtn.disabled = false;
-      loginBtn.textContent = 'Sign In';
+      if (loginBtn) {
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Sign In';
+      }
     }
   }
 
@@ -734,8 +846,11 @@ class ATSTailor {
     const progressFill = document.getElementById('progressFill');
     const progressText = document.getElementById('progressText');
     
-    btn.disabled = true;
-    btn.querySelector('.btn-text').textContent = 'Tailoring...';
+    if (btn) {
+      btn.disabled = true;
+      const btnText = btn.querySelector('.btn-text');
+      if (btnText) btnText.textContent = 'Tailoring...';
+    }
     progressContainer?.classList.remove('hidden');
     this.setStatus('Tailoring...', 'working');
 
@@ -859,8 +974,11 @@ class ATSTailor {
       this.showToast(error.message || 'Failed', 'error');
       this.setStatus('Error', 'error');
     } finally {
-      btn.disabled = false;
-      btn.querySelector('.btn-text').textContent = 'Tailor CV & Cover Letter';
+      if (btn) {
+        btn.disabled = false;
+        const btnText = btn.querySelector('.btn-text');
+        if (btnText) btnText.textContent = 'Tailor CV & Cover Letter';
+      }
       setTimeout(() => progressContainer?.classList.add('hidden'), 2000);
     }
   }
